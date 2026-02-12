@@ -100,6 +100,8 @@ export function generateBlend(input: BlendInput, K = 40, params: Partial<Params>
         title: string;
         artist: string;
         artistKey: string;
+        isrc?: string;
+        providerIds: { spotify?: string; apple?: string };
         contribs: Contrib[];
     };
 
@@ -109,19 +111,37 @@ export function generateBlend(input: BlendInput, K = 40, params: Partial<Params>
         const cid = canonicalIdOf(c);
         const artistKey = normArtist(c.artist);
         const existing = groupsById.get(cid);
+
         if (!existing) {
+            // <-- providerIds goes RIGHT HERE for a new group
+            const providerIds: { spotify?: string; apple?: string } = {};
+            if (c.provider === "spotify") providerIds.spotify = c.id;
+            if (c.provider === "apple") providerIds.apple = c.id;
+
             groupsById.set(cid, {
                 canonicalId: cid,
                 title: c.title,
                 artist: c.artist,
                 artistKey,
+                isrc: c.isrc,
+                providerIds,
                 contribs: [c],
             });
         } else {
-            // keep "best looking" title/artist (first seen is fine)
+            // <-- and HERE for merging into an existing group
             existing.contribs.push(c);
+
+            if (c.isrc && !existing.isrc) existing.isrc = c.isrc;
+
+            if (c.provider === "spotify" && !existing.providerIds.spotify) {
+                existing.providerIds.spotify = c.id;
+            }
+            if (c.provider === "apple" && !existing.providerIds.apple) {
+                existing.providerIds.apple = c.id;
+            }
         }
     }
+
 
     const groups = [...groupsById.values()];
 
@@ -148,13 +168,20 @@ export function generateBlend(input: BlendInput, K = 40, params: Partial<Params>
         title: string;
         artist: string;
         artistKey: string;
+
+        isrc?: string;
+        providerIds: { spotify?: string; apple?: string };
+
         ownerUserId: string;
         bestSource: string;
         bestRank: number;
         score: number;
-        pickedFor: PickedFor;
+
+        pickedFor: "shared" | string; // keep your new behavior
         explain: string;
     };
+
+
 
     function sourceBonus(src: string) {
         return p.sourceBonus[src] ?? 0;
@@ -204,6 +231,10 @@ export function generateBlend(input: BlendInput, K = 40, params: Partial<Params>
                 title: g.title,
                 artist: g.artist,
                 artistKey: g.artistKey,
+
+                isrc: g.isrc,
+                providerIds: g.providerIds,
+
                 ownerUserId: userId,
                 bestSource: best.source,
                 bestRank: best.rank,
@@ -211,6 +242,8 @@ export function generateBlend(input: BlendInput, K = 40, params: Partial<Params>
                 pickedFor,
                 explain: reasons.join("; "),
             });
+
+
         }
     }
 
@@ -279,10 +312,17 @@ export function generateBlend(input: BlendInput, K = 40, params: Partial<Params>
         canonicalId: s.canonicalId,
         title: s.title,
         artist: s.artist,
+        isrc: s.isrc,
+        providerIds: s.providerIds,
+        sourceUserId: s.ownerUserId,
         score: s.score,
         pickedFor: [s.pickedFor],
         explain: s.explain,
+        fallbackQuery: `${s.artist} ${s.title}`.trim(),
     }));
+
+
+
 
     return {
         tracks: outTracks,

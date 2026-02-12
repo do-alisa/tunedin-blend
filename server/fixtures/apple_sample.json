@@ -1,0 +1,29 @@
+{
+    "userId": "u2",
+    "provider": "apple",
+    "tracks": [
+        {
+            "id": "am:song:999",
+            "title": "Blinding Lights",
+            "artist": "The Weeknd",
+            "isrc": "USUG11904276",
+            "source": "heavyRotation",
+            "rank": 4
+        },
+        {
+            "id": "am:song:888",
+            "title": "Levitating",
+            "artist": "Dua Lipa",
+            "isrc": "GBAHT2000590",
+            "source": "heavyRotation",
+            "rank": 1
+        },
+        {
+            "id": "am:song:777",
+            "title": "HUMBLE.",
+            "artist": "Kendrick Lamar",
+            "source": "recentlyAdded",
+            "rank": 10
+        }
+    ]
+}

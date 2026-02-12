@@ -1,6 +1,8 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
+import appleAuthRouter from './routes/appleAuth.js';
+import { spotifyAuthRouter, spotifyApiRouter } from './routes/spotifyAuth.js';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -19,6 +21,10 @@ app.get('/health', (_req, res) => {
 app.get('/api/ping', (_req, res) => {
   res.json({ message: 'pong', app: 'TunedIn Blend' });
 });
+
+app.use('/api/auth/apple', appleAuthRouter);
+app.use('/api/auth/spotify', spotifyAuthRouter);
+app.use('/api/spotify', spotifyApiRouter);
 
 app.listen(PORT, () => {
   console.log(`[server] running on http://localhost:${PORT}`);

@@ -1,0 +1,29 @@
+{
+    "userId": "u1",
+    "provider": "spotify",
+    "tracks": [
+        {
+            "id": "sp:track:111",
+            "title": "Blinding Lights",
+            "artist": "The Weeknd",
+            "isrc": "USUG11904276",
+            "source": "top",
+            "rank": 1
+        },
+        {
+            "id": "sp:track:222",
+            "title": "Starboy",
+            "artist": "The Weeknd",
+            "isrc": "USUG11600976",
+            "source": "top",
+            "rank": 2
+        },
+        {
+            "id": "sp:track:333",
+            "title": "N95",
+            "artist": "Kendrick Lamar",
+            "source": "top",
+            "rank": 3
+        }
+    ]
+}

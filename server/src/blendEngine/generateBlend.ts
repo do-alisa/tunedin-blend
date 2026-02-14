@@ -19,7 +19,7 @@ const DEFAULT_PARAMS: Params = {
     sourceBonus: { top_short: 0.05, top_medium: 0.03 },
     artistCap: 2,
     capUserSlack: 2,
-    maxUniquePerUser: 0,
+    maxUniquePerUser: 1,
     maxRunSameUser: 3,
 };
 

@@ -96,6 +96,14 @@ export default function AppPage() {
       await music.authorize();
 
       const userToken = music.musicUserToken;
+
+      await fetch(`${API_URL}/api/auth/apple/user-token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ musicUserToken: userToken }),
+      });
+
+
       if (!userToken) throw new Error('Authorization succeeded but no user token received.');
 
       setApple({ step: 'authorized', tokenLength: userToken.length });

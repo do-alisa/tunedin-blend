@@ -16,12 +16,18 @@ const DEFAULT_PARAMS: Params = {
     w_shared: 0.55,
     w_artist: 0.25,
     w_rank: 0.2,
-    sourceBonus: { top_short: 0.05, top_medium: 0.03 },
+    sourceBonus: {
+        top_short: 0.05,
+        top_medium: 0.03,
+        heavyRotation: 0.05,   // strong preference signal
+        recentlyAdded: 0.02,   // still meaningful
+    },
     artistCap: 2,
     capUserSlack: 2,
     maxUniquePerUser: 1,
     maxRunSameUser: 3,
 };
+
 
 function slug(s: string): string {
     return s

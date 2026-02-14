@@ -94,7 +94,7 @@ router.get("/me/apple/taste", async (_req, res) => {
         const tokenRes = await fetch("http://localhost:3001/api/auth/apple/developer-token");
         const { token: developerToken } = await tokenRes.json();
 
-        const tracks = await getTasteForAppleMusicUser(developerToken, { heavyLimit: 25, addedLimit: 25 });
+        const tracks = await getTasteForAppleMusicUser(developerToken, { heavyLimit: 50, addedLimit: 50 });
 
         res.json({
             tracks,

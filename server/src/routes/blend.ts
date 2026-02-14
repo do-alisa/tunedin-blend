@@ -217,4 +217,124 @@ router.get("/me/blend-preview-artist-overlap", async (req, res) => {
     }
 });
 
+router.get("/me/blend-preview-spotify-vs-fake-apple-3", async (req, res) => {
+    try {
+        const K = Math.min(100, Math.max(1, Number(req.query.k ?? 40)));
+        const limit = Math.min(50, Math.max(30, Number(req.query.limit ?? 50)));
+
+        // Tune these if you want, but defaults are good:
+        const SPOTIFY_N = Math.min(25, limit); // Spotify user only has top N
+        const OVERLAP_N = 3;                  // exactly 3 shared
+        const APPLE_UNIQUE_N = 20;            // plenty of unique candidates
+
+        const taste = await getTasteForSpotifyUser(limit);
+
+        const toInput = (t: any) => ({
+            id: t.id,
+            title: t.title,
+            artist: t.artist,
+            isrc: t.isrc,
+            source: t.source,
+            rank: t.rank,
+        });
+
+        // --- Spotify user: only first SPOTIFY_N tracks
+        const spotifyPool = taste.slice(0, SPOTIFY_N);
+        const spotifyTracks = spotifyPool.map(toInput);
+
+        // --- Choose 3 overlap tracks (prefer ones with ISRC)
+        const overlapCandidates = spotifyPool.filter((t) => !!t.isrc);
+        const overlapBase =
+            overlapCandidates.length >= OVERLAP_N
+                ? overlapCandidates.slice(0, OVERLAP_N)
+                : spotifyPool.slice(0, OVERLAP_N);
+
+        const overlapSpotifyIds = new Set(overlapBase.map((t) => t.id));
+
+        // --- Fake Apple overlap: same title/artist/isrc => same canonicalId, but different provider id
+        const overlapApple = overlapBase.map((t, i) => ({
+            id: `apple_${t.id}`,      // fake Apple song id
+            title: t.title,
+            artist: t.artist,
+            isrc: t.isrc,
+            source: "heavyRotation",  // pretend Apple surface
+            rank: i + 1,
+        }));
+
+        // --- Fake Apple unique tracks:
+        // take tracks OUTSIDE spotifyPool so they cannot be shared
+        const appleUniquePool = taste
+            .slice(SPOTIFY_N)
+            .filter((t) => !overlapSpotifyIds.has(t.id));
+
+        const uniqueApple = appleUniquePool.slice(0, APPLE_UNIQUE_N).map((t, i) => ({
+            id: `apple_unique_${t.id}`,
+            title: t.title,
+            artist: t.artist,
+            isrc: t.isrc,
+            source: "recentlyAdded",
+            rank: i + 1,
+        }));
+
+        // If you don’t have enough tracks beyond SPOTIFY_N (rare), fall back to mutating IDs
+        // (still unique because canonicalId changes via ISRC removal)
+        if (uniqueApple.length < 5) {
+            const fallback = spotifyPool
+                .filter((t) => !overlapSpotifyIds.has(t.id))
+                .slice(0, 10)
+                .map((t, i) => ({
+                    id: `apple_fallback_${t.id}`,
+                    title: `${t.title} (alt)`, // changes slug => not shared
+                    artist: t.artist,
+                    isrc: undefined,           // force title+artist canonical
+                    source: "recentlyAdded",
+                    rank: i + 1,
+                }));
+            uniqueApple.push(...fallback);
+        }
+
+        const input: BlendInput = {
+            roomId: "preview-spotify-vs-fake-apple-3",
+            users: [
+                { userId: "spotify-me", provider: "spotify", tracks: spotifyTracks },
+                { userId: "apple-me", provider: "apple", tracks: [...overlapApple, ...uniqueApple] },
+            ],
+        };
+
+        const blend = generateBlend(input, K, {
+            sourceBonus: {
+                top_short: 0.05,
+                top_medium: 0.03,
+                heavyRotation: 0.05,
+                recentlyAdded: 0.02,
+            },
+        });
+
+        res.json({
+            ...blend,
+            meta: {
+                spotifyN: SPOTIFY_N,
+                overlapN: OVERLAP_N,
+                appleUniqueN: uniqueApple.length,
+                overlapPreview: overlapBase.map((t) => ({
+                    title: t.title,
+                    artist: t.artist,
+                    isrc: t.isrc ?? null,
+                    spotifyId: t.id,
+                    fakeAppleId: `apple_${t.id}`,
+                })),
+            },
+        });
+    } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        if (message.toLowerCase().includes("not connected")) {
+            res.status(401).json({ error: message });
+            return;
+        }
+        res.status(500).json({ error: message });
+    }
+});
+
+
+
 export default router;

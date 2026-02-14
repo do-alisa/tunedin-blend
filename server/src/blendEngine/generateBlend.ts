@@ -1,3 +1,4 @@
+// server/src/blendEngine/generateBlend.ts
 import type { BlendInput, BlendOutput, OutputTrack, PickedFor } from "./types";
 
 type Params = {
@@ -7,7 +8,7 @@ type Params = {
     sourceBonus: Record<string, number>;
     artistCap: number;
     capUserSlack: number; // the +2
-    maxSpicePerUser: number; // 0/1 recommended
+    maxUniquePerUser: number; // 0/1 recommended
     maxRunSameUser: number; // soft constraint (e.g. 3)
 };
 
@@ -15,17 +16,17 @@ const DEFAULT_PARAMS: Params = {
     w_shared: 0.55,
     w_artist: 0.25,
     w_rank: 0.2,
-    sourceBonus: { heavyRotation: 0.08, top: 0.05, recentlyAdded: 0.02 },
+    sourceBonus: { top_short: 0.05, top_medium: 0.03 },
     artistCap: 2,
     capUserSlack: 2,
-    maxSpicePerUser: 1,
+    maxUniquePerUser: 0,
     maxRunSameUser: 3,
 };
 
 function slug(s: string): string {
     return s
         .toLowerCase()
-        .replace(/\(.*?\)/g, " ")           // remove (feat...) etc
+        .replace(/\(.*?\)/g, " ") // remove (feat...) etc
         .replace(/\bfeat\.?\b/g, " ")
         .replace(/\bft\.?\b/g, " ")
         .replace(/&/g, " and ")
@@ -36,6 +37,33 @@ function slug(s: string): string {
 
 function normArtist(a: string): string {
     return slug(a);
+}
+
+/**
+ * Convert display artist string into multiple normalized artist keys.
+ * e.g. "DJ Snake, Justin Bieber" => ["dj snake", "justin bieber"]
+ *
+ * NOTE: Your Spotify mapper joins artists with ", ".
+ */
+function artistKeysFromArtistString(artist: string): string[] {
+    const parts = artist
+        .split(",")
+        .flatMap((p) => p.split(" & "))
+        .flatMap((p) => p.split(" and "))
+        .map((s) => s.trim())
+        .filter(Boolean);
+
+    const out: string[] = [];
+    const seen = new Set<string>();
+    for (const name of parts) {
+        const key = normArtist(name);
+        if (!key) continue;
+        if (!seen.has(key)) {
+            seen.add(key);
+            out.push(key);
+        }
+    }
+    return out;
 }
 
 function canonicalIdOf(t: { isrc?: string; title: string; artist: string }): string {
@@ -86,7 +114,7 @@ export function generateBlend(input: BlendInput, K = 40, params: Partial<Params>
         return {
             tracks: [],
             stats: {
-                perUserCounts: Object.fromEntries(users.map(u => [u.userId, 0])),
+                perUserCounts: Object.fromEntries(users.map((u) => [u.userId, 0])),
                 perArtistCounts: {},
                 artistCap: p.artistCap,
                 userCap: 0,
@@ -98,8 +126,9 @@ export function generateBlend(input: BlendInput, K = 40, params: Partial<Params>
     type Group = {
         canonicalId: string;
         title: string;
-        artist: string;
-        artistKey: string;
+        artist: string; // display string
+        artistKeys: string[]; // ALL artists on the track
+        primaryArtistKey: string; // first artist (for caps)
         isrc?: string;
         providerIds: { spotify?: string; apple?: string };
         contribs: Contrib[];
@@ -109,11 +138,12 @@ export function generateBlend(input: BlendInput, K = 40, params: Partial<Params>
 
     for (const c of contribs) {
         const cid = canonicalIdOf(c);
-        const artistKey = normArtist(c.artist);
+        const artistKeys = artistKeysFromArtistString(c.artist);
+        const primaryArtistKey = artistKeys[0] ?? normArtist(c.artist);
+
         const existing = groupsById.get(cid);
 
         if (!existing) {
-            // <-- providerIds goes RIGHT HERE for a new group
             const providerIds: { spotify?: string; apple?: string } = {};
             if (c.provider === "spotify") providerIds.spotify = c.id;
             if (c.provider === "apple") providerIds.apple = c.id;
@@ -122,52 +152,70 @@ export function generateBlend(input: BlendInput, K = 40, params: Partial<Params>
                 canonicalId: cid,
                 title: c.title,
                 artist: c.artist,
-                artistKey,
+                artistKeys,
+                primaryArtistKey,
                 isrc: c.isrc,
                 providerIds,
                 contribs: [c],
             });
         } else {
-            // <-- and HERE for merging into an existing group
             existing.contribs.push(c);
+
+            // merge artist keys (unique)
+            for (const k of artistKeys) {
+                if (!existing.artistKeys.includes(k)) existing.artistKeys.push(k);
+            }
+            if (!existing.primaryArtistKey) existing.primaryArtistKey = primaryArtistKey;
 
             if (c.isrc && !existing.isrc) existing.isrc = c.isrc;
 
-            if (c.provider === "spotify" && !existing.providerIds.spotify) {
-                existing.providerIds.spotify = c.id;
-            }
-            if (c.provider === "apple" && !existing.providerIds.apple) {
-                existing.providerIds.apple = c.id;
-            }
+            if (c.provider === "spotify" && !existing.providerIds.spotify) existing.providerIds.spotify = c.id;
+            if (c.provider === "apple" && !existing.providerIds.apple) existing.providerIds.apple = c.id;
         }
     }
-
 
     const groups = [...groupsById.values()];
 
     // --- sharedCount per track (distinct users)
     const sharedCount = new Map<string, number>();
     for (const g of groups) {
-        const distinctUsers = new Set(g.contribs.map(c => c.userId));
+        const distinctUsers = new Set(g.contribs.map((c) => c.userId));
         sharedCount.set(g.canonicalId, distinctUsers.size);
     }
 
     // --- artistSharedCount (how many users have any track by artist)
     const artistUsers = new Map<string, Set<string>>();
     for (const g of groups) {
-        const set = artistUsers.get(g.artistKey) ?? new Set<string>();
-        for (const c of g.contribs) set.add(c.userId);
-        artistUsers.set(g.artistKey, set);
+        for (const artistKey of g.artistKeys) {
+            const set = artistUsers.get(artistKey) ?? new Set<string>();
+            for (const c of g.contribs) set.add(c.userId);
+            artistUsers.set(artistKey, set);
+        }
     }
-    const artistSharedCount = (artistKey: string) => (artistUsers.get(artistKey)?.size ?? 0);
+
+    const artistSharedCount = (artistKey: string) => artistUsers.get(artistKey)?.size ?? 0;
+
+    // For a multi-artist track, treat overlap as the best overlap among its artists
+    function bestArtistSharedCount(g: Group): number {
+        let best = 0;
+        for (const k of g.artistKeys) best = Math.max(best, artistSharedCount(k));
+        return best;
+    }
+
+    function sourceBonus(src: string) {
+        return p.sourceBonus[src] ?? 0;
+    }
 
     // --- Build one "candidate" per (track group, owner user)
-    // We pick the best contribution per user (lowest rank + best source bonus)
+    type Bucket = "shared" | "bridge" | "unique";
+
     type Candidate = {
         canonicalId: string;
         title: string;
         artist: string;
-        artistKey: string;
+
+        artistKeys: string[];
+        primaryArtistKey: string;
 
         isrc?: string;
         providerIds: { spotify?: string; apple?: string };
@@ -177,15 +225,10 @@ export function generateBlend(input: BlendInput, K = 40, params: Partial<Params>
         bestRank: number;
         score: number;
 
-        pickedFor: "shared" | string; // keep your new behavior
+        bucket: Bucket;
+        pickedFor: PickedFor; // UI: "shared" OR userId
         explain: string;
     };
-
-
-
-    function sourceBonus(src: string) {
-        return p.sourceBonus[src] ?? 0;
-    }
 
     const candidates: Candidate[] = [];
 
@@ -201,28 +244,30 @@ export function generateBlend(input: BlendInput, K = 40, params: Partial<Params>
         for (const [userId, arr] of byUser.entries()) {
             // best contrib for that user
             arr.sort((a, b) => {
-                // primary: lower rank, secondary: higher source bonus
                 if (a.rank !== b.rank) return a.rank - b.rank;
                 return sourceBonus(b.source) - sourceBonus(a.source);
             });
             const best = arr[0];
 
-            const sc = (sharedCount.get(g.canonicalId) ?? 1) / U;
-            const ac = artistSharedCount(g.artistKey) / U;
-            const rankScore = 1 / (1 + Math.max(1, best.rank));
-            const score =
-                p.w_shared * sc +
-                p.w_artist * ac +
-                p.w_rank * rankScore +
-                sourceBonus(best.source);
-
-            // bucket label
             const sharedN = sharedCount.get(g.canonicalId) ?? 1;
-            const pickedFor: PickedFor = sharedN >= 2 ? "shared" : userId;
+            const aN = bestArtistSharedCount(g);
+
+            let bucket: Bucket = "unique";
+            if (sharedN >= 2) bucket = "shared";
+            else if (aN >= 2) bucket = "bridge";
+
+            // scoring
+            const sc = sharedN / U;
+            const ac = aN / U;
+            const rankScore = 1 / (1 + Math.max(1, best.rank));
+            const score = p.w_shared * sc + p.w_artist * ac + p.w_rank * rankScore + sourceBonus(best.source);
+
+            // UI label (your current pattern)
+            const pickedFor: PickedFor = bucket === "shared" ? "shared" : userId;
 
             const reasons: string[] = [];
+            reasons.push(bucket);
             if (sharedN >= 2) reasons.push(`shared by ${sharedN} users`);
-            const aN = artistSharedCount(g.artistKey);
             if (aN >= 2) reasons.push(`artist overlap (${aN} users)`);
             reasons.push(`${best.source} rank ${best.rank}`);
 
@@ -230,7 +275,9 @@ export function generateBlend(input: BlendInput, K = 40, params: Partial<Params>
                 canonicalId: g.canonicalId,
                 title: g.title,
                 artist: g.artist,
-                artistKey: g.artistKey,
+
+                artistKeys: g.artistKeys,
+                primaryArtistKey: g.primaryArtistKey,
 
                 isrc: g.isrc,
                 providerIds: g.providerIds,
@@ -239,22 +286,22 @@ export function generateBlend(input: BlendInput, K = 40, params: Partial<Params>
                 bestSource: best.source,
                 bestRank: best.rank,
                 score: clamp01(score),
+
+                bucket,
                 pickedFor,
                 explain: reasons.join("; "),
             });
-
-
         }
     }
 
-    // --- Sort by score desc
+    // Sort by score desc (within each bucket we still want best first)
     candidates.sort((a, b) => b.score - a.score);
 
     // --- Selection with constraints
     const userCap = Math.ceil(K / U) + p.capUserSlack;
-    const perUserCounts: Record<string, number> = Object.fromEntries(users.map(u => [u.userId, 0]));
+    const perUserCounts: Record<string, number> = Object.fromEntries(users.map((u) => [u.userId, 0]));
     const perArtistCounts: Record<string, number> = {};
-    const spicePerUser: Record<string, number> = Object.fromEntries(users.map(u => [u.userId, 0]));
+    const uniquePerUser: Record<string, number> = Object.fromEntries(users.map((u) => [u.userId, 0]));
 
     const pickedCanonical = new Set<string>();
     const selected: Candidate[] = [];
@@ -267,48 +314,50 @@ export function generateBlend(input: BlendInput, K = 40, params: Partial<Params>
         const uCount = perUserCounts[c.ownerUserId] ?? 0;
         if (uCount >= userCap) return false;
 
-        const aCount = perArtistCounts[c.artistKey] ?? 0;
+        // Cap based on primary artist (so features don’t consume cap)
+        const aCount = perArtistCounts[c.primaryArtistKey] ?? 0;
         if (aCount >= currentArtistCap) return false;
 
-        if (c.pickedFor === "spice" && (spicePerUser[c.ownerUserId] ?? 0) >= p.maxSpicePerUser) return false;
+        // enforce "unique" cap per user (this is how you avoid too much discovery)
+        if (c.bucket === "unique" && (uniquePerUser[c.ownerUserId] ?? 0) >= p.maxUniquePerUser) return false;
 
         // soft constraint: max run of same user
         if (p.maxRunSameUser > 0 && selected.length >= p.maxRunSameUser) {
             const lastN = selected.slice(-p.maxRunSameUser);
-            if (lastN.every(x => x.ownerUserId === c.ownerUserId)) return false;
+            if (lastN.every((x) => x.ownerUserId === c.ownerUserId)) return false;
         }
 
         return true;
     }
 
-    // pass 1 with strict artist cap
-    for (const c of candidates) {
-        if (selected.length >= K) break;
-        if (!canAdd(c)) continue;
+    const bucketOrder: Bucket[] = ["shared", "bridge", "unique"];
 
-        selected.push(c);
-        pickedCanonical.add(c.canonicalId);
-        perUserCounts[c.ownerUserId] = (perUserCounts[c.ownerUserId] ?? 0) + 1;
-        perArtistCounts[c.artistKey] = (perArtistCounts[c.artistKey] ?? 0) + 1;
-        if (c.pickedFor === "spice") spicePerUser[c.ownerUserId] = (spicePerUser[c.ownerUserId] ?? 0) + 1;
-    }
+    function pickInBucketOrder() {
+        for (const bucket of bucketOrder) {
+            for (const c of candidates) {
+                if (selected.length >= K) return;
+                if (c.bucket !== bucket) continue;
+                if (!canAdd(c)) continue;
 
-    // pass 2: if we didn't fill K, loosen artist cap to 3
-    if (selected.length < K) {
-        currentArtistCap = Math.max(currentArtistCap, 3);
-        for (const c of candidates) {
-            if (selected.length >= K) break;
-            if (!canAdd(c)) continue;
-
-            selected.push(c);
-            pickedCanonical.add(c.canonicalId);
-            perUserCounts[c.ownerUserId] = (perUserCounts[c.ownerUserId] ?? 0) + 1;
-            perArtistCounts[c.artistKey] = (perArtistCounts[c.artistKey] ?? 0) + 1;
-            if (c.pickedFor === "spice") spicePerUser[c.ownerUserId] = (spicePerUser[c.ownerUserId] ?? 0) + 1;
+                selected.push(c);
+                pickedCanonical.add(c.canonicalId);
+                perUserCounts[c.ownerUserId] = (perUserCounts[c.ownerUserId] ?? 0) + 1;
+                perArtistCounts[c.primaryArtistKey] = (perArtistCounts[c.primaryArtistKey] ?? 0) + 1;
+                if (c.bucket === "unique") uniquePerUser[c.ownerUserId] = (uniquePerUser[c.ownerUserId] ?? 0) + 1;
+            }
         }
     }
 
-    const outTracks: OutputTrack[] = selected.map(s => ({
+    // pass 1: strict artist cap
+    pickInBucketOrder();
+
+    // pass 2: if we didn't fill K, loosen artist cap to 3 and try again
+    if (selected.length < K) {
+        currentArtistCap = Math.max(currentArtistCap, 3);
+        pickInBucketOrder();
+    }
+
+    const outTracks: OutputTrack[] = selected.map((s) => ({
         canonicalId: s.canonicalId,
         title: s.title,
         artist: s.artist,
@@ -320,9 +369,6 @@ export function generateBlend(input: BlendInput, K = 40, params: Partial<Params>
         explain: s.explain,
         fallbackQuery: `${s.artist} ${s.title}`.trim(),
     }));
-
-
-
 
     return {
         tracks: outTracks,
